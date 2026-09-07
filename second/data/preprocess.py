@@ -46,6 +46,7 @@ def prep_pointcloud(input_dict,
                     root_path,
                     voxel_generator,
                     target_assigner,
+                    pillar_voxel_generator=None,
                     db_sampler=None,
                     max_voxels=20000,
                     class_names=['Car'],
@@ -233,7 +234,7 @@ def prep_pointcloud(input_dict,
     grid_size = voxel_generator.grid_size
     # [352, 400]
 
-    voxels, coordinates, num_points = voxel_generator.generate(
+    voxels, coordinates, num_points = (pillar_voxel_generator or voxel_generator).generate(
         points, max_voxels)
 
     example = {

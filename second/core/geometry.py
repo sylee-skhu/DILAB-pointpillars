@@ -90,7 +90,7 @@ def surface_equ_3d_jit(polygon_surfaces):
     normal_vec = np.cross(surface_vec[:, :, 0, :], surface_vec[:, :, 1, :])
     # print(normal_vec.shape, points[..., 0, :].shape)
     # d = -np.inner(normal_vec, points[..., 0, :])
-    d = np.einsum('aij, aij->ai', normal_vec, polygon_surfaces[:, :, 0, :])
+    d = np.sum(normal_vec * polygon_surfaces[:, :, 0, :], axis=2)
     return normal_vec, -d
 
 
@@ -148,12 +148,13 @@ def points_in_convex_polygon_jit(points, polygon, clockwise=True):
     num_points_of_polygon = polygon.shape[1]
     num_points = points.shape[0]
     num_polygons = polygon.shape[0]
+    # numba's nopython indexing doesn't support a plain list here, so build
+    # the rolled index [n-1, 0, 1, ..., n-2] as an int array instead.
+    roll_idx = np.roll(np.arange(num_points_of_polygon), 1)
     if clockwise:
-        vec1 = polygon - polygon[:, [num_points_of_polygon - 1] +
-                                 list(range(num_points_of_polygon - 1)), :]
+        vec1 = polygon - polygon[:, roll_idx, :]
     else:
-        vec1 = polygon[:, [num_points_of_polygon - 1] +
-                       list(range(num_points_of_polygon - 1)), :] - polygon
+        vec1 = polygon[:, roll_idx, :] - polygon
     # vec1: [num_polygon, num_points_of_polygon, 2]
     ret = np.zeros((num_points, num_polygons), dtype=np.bool_)
     success = True

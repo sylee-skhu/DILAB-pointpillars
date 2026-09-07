@@ -541,8 +541,8 @@ def create_anchors_3d_stride(feature_size,
     x_centers = x_centers * x_stride + x_offset
     sizes = np.reshape(np.array(sizes, dtype=dtype), [-1, 3])
     rotations = np.array(rotations, dtype=dtype)
-    rets = np.meshgrid(
-        x_centers, y_centers, z_centers, rotations, indexing='ij')
+    rets = list(np.meshgrid(
+        x_centers, y_centers, z_centers, rotations, indexing='ij'))
     tile_shape = [1] * 5
     tile_shape[-2] = int(sizes.shape[0])
     for i in range(len(rets)):
@@ -579,8 +579,8 @@ def create_anchors_3d_range(feature_size,
         anchor_range[0], anchor_range[3], feature_size[2], dtype=dtype)
     sizes = np.reshape(np.array(sizes, dtype=dtype), [-1, 3])
     rotations = np.array(rotations, dtype=dtype)
-    rets = np.meshgrid(
-        x_centers, y_centers, z_centers, rotations, indexing='ij')
+    rets = list(np.meshgrid(
+        x_centers, y_centers, z_centers, rotations, indexing='ij'))
     tile_shape = [1] * 5
     tile_shape[-2] = int(sizes.shape[0])
     for i in range(len(rets)):
@@ -696,26 +696,17 @@ def points_in_rbbox(points, rbbox, lidar=True):
     return indices
 
 
-@numba.jit(nopython=False)
 def corner_to_surfaces_3d(corners):
     """convert 3d box corners from corner function above
     to surfaces that normal vectors all direct to internal.
 
     Args:
-        corners (float array, [N, 8, 3]): 3d box corners. 
+        corners (float array, [N, 8, 3]): 3d box corners.
     Returns:
-        surfaces (float array, [N, 6, 4, 3]): 
+        surfaces (float array, [N, 6, 4, 3]):
     """
     # box_corners: [N, 8, 3], must from corner functions in this module
-    surfaces = np.array([
-        [corners[:, 0], corners[:, 1], corners[:, 2], corners[:, 3]],
-        [corners[:, 7], corners[:, 6], corners[:, 5], corners[:, 4]],
-        [corners[:, 0], corners[:, 3], corners[:, 7], corners[:, 4]],
-        [corners[:, 1], corners[:, 5], corners[:, 6], corners[:, 2]],
-        [corners[:, 0], corners[:, 4], corners[:, 5], corners[:, 1]],
-        [corners[:, 3], corners[:, 2], corners[:, 6], corners[:, 7]],
-    ]).transpose([2, 0, 1, 3])
-    return surfaces
+    return corner_to_surfaces_3d_jit(corners)
 
 
 @numba.jit(nopython=True)

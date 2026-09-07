@@ -83,15 +83,27 @@ def example_convert_to_torch(example, dtype=torch.float32,
     return example_torch
 
 
+def _worker_init_fn(worker_id):
+    time_seed = np.array(time.time(), dtype=np.int32)
+    np.random.seed(time_seed + worker_id)
+    print(f"WORKER {worker_id} seed:", np.random.get_state()[1][0])
+
+
 def train(config_path,
           model_dir,
           result_path=None,
           create_folder=False,
           display_step=50,
           summary_step=5,
-          pickle_result=True):
+          pickle_result=True,
+          view='xy'):
     """train a VoxelNet model specified by a config file.
+
+    `view` selects the pillar-axis ablation variant: 'xy' (baseline
+    PointPillars, collapse Z), 'xz' (collapse Y), 'yz' (collapse X). See
+    second/core/view_transform.py.
     """
+    assert view in ('xy', 'xz', 'yz'), f"unknown view {view!r}"
     if create_folder:
         if pathlib.Path(model_dir).exists():
             model_dir = torchplus.train.create_folder(model_dir)
@@ -130,7 +142,7 @@ def train(config_path,
     # BUILD NET
     ######################
     center_limit_range = model_cfg.post_center_limit_range
-    net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    net = second_builder.build(model_cfg, voxel_generator, target_assigner, view=view)
     net.cuda()
     # net_train = torch.nn.DataParallel(net).cuda()
     print("num_trainable parameters:", len(list(net.parameters())))
@@ -171,18 +183,16 @@ def train(config_path,
         model_cfg,
         training=True,
         voxel_generator=voxel_generator,
-        target_assigner=target_assigner)
+        target_assigner=target_assigner,
+        view=view)
     eval_dataset = input_reader_builder.build(
         eval_input_cfg,
         model_cfg,
         training=False,
         voxel_generator=voxel_generator,
+        view=view,
         target_assigner=target_assigner)
 
-    def _worker_init_fn(worker_id):
-        time_seed = np.array(time.time(), dtype=np.int32)
-        np.random.seed(time_seed + worker_id)
-        print(f"WORKER {worker_id} seed:", np.random.get_state()[1][0])
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -555,7 +565,9 @@ def evaluate(config_path,
              predict_test=False,
              ckpt_path=None,
              ref_detfile=None,
-             pickle_result=True):
+             pickle_result=True,
+             view='xy'):
+    assert view in ('xy', 'xz', 'yz'), f"unknown view {view!r}"
     model_dir = pathlib.Path(model_dir)
     if predict_test:
         result_name = 'predict_test'
@@ -585,7 +597,7 @@ def evaluate(config_path,
     target_assigner = target_assigner_builder.build(target_assigner_cfg,
                                                     bv_range, box_coder)
 
-    net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    net = second_builder.build(model_cfg, voxel_generator, target_assigner, view=view)
     net.cuda()
     if train_cfg.enable_mixed_precision:
         net.half()
@@ -602,6 +614,7 @@ def evaluate(config_path,
         model_cfg,
         training=False,
         voxel_generator=voxel_generator,
+        view=view,
         target_assigner=target_assigner)
     eval_dataloader = torch.utils.data.DataLoader(
         eval_dataset,

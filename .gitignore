@@ -106,3 +106,8 @@ venv.bak/
 .mypy_cache/
 
 .vscode
+.venv311/
+
+second/data/kitti/
+
+second/model_dir_*/

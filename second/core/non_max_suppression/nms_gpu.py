@@ -19,14 +19,27 @@ except:
     from second.core.non_max_suppression.nms import non_max_suppression
 
 
+# numba's CUDA target mistypes the builtin two-arg max()/min() when called
+# from device code on this numba version (raises a bogus "Signature
+# mismatch" TypeError), so use explicit comparisons instead everywhere below.
+@cuda.jit(device=True, inline=True)
+def _max2(a, b):
+    return a if a > b else b
+
+
+@cuda.jit(device=True, inline=True)
+def _min2(a, b):
+    return a if a < b else b
+
+
 @cuda.jit('(float32[:], float32[:])', device=True, inline=True)
 def iou_device(a, b):
-    left = max(a[0], b[0])
-    right = min(a[2], b[2])
-    top = max(a[1], b[1])
-    bottom = min(a[3], b[3])
-    width = max(right - left + 1, 0.)
-    height = max(bottom - top + 1, 0.)
+    left = _max2(a[0], b[0])
+    right = _min2(a[2], b[2])
+    top = _max2(a[1], b[1])
+    bottom = _min2(a[3], b[3])
+    width = _max2(right - left + 1, 0.)
+    height = _max2(bottom - top + 1, 0.)
     interS = width * height
     Sa = (a[2] - a[0] + 1) * (a[3] - a[1] + 1)
     Sb = (b[2] - b[0] + 1) * (b[3] - b[1] + 1)
@@ -39,8 +52,8 @@ def nms_kernel_v2(n_boxes, nms_overlap_thresh, dev_boxes, dev_mask):
     row_start = cuda.blockIdx.y
     col_start = cuda.blockIdx.x
     tx = cuda.threadIdx.x
-    row_size = min(n_boxes - row_start * threadsPerBlock, threadsPerBlock)
-    col_size = min(n_boxes - col_start * threadsPerBlock, threadsPerBlock)
+    row_size = _min2(n_boxes - row_start * threadsPerBlock, threadsPerBlock)
+    col_size = _min2(n_boxes - col_start * threadsPerBlock, threadsPerBlock)
     block_boxes = cuda.shared.array(
         shape=(threadsPerBlock, 5), dtype=numba.float32)
     dev_box_idx = threadsPerBlock * col_start + tx
@@ -74,8 +87,8 @@ def nms_kernel(n_boxes, nms_overlap_thresh, dev_boxes, dev_mask):
     row_start = cuda.blockIdx.y
     col_start = cuda.blockIdx.x
     tx = cuda.threadIdx.x
-    row_size = min(n_boxes - row_start * threadsPerBlock, threadsPerBlock)
-    col_size = min(n_boxes - col_start * threadsPerBlock, threadsPerBlock)
+    row_size = _min2(n_boxes - row_start * threadsPerBlock, threadsPerBlock)
+    col_size = _min2(n_boxes - col_start * threadsPerBlock, threadsPerBlock)
     block_boxes = cuda.shared.array(shape=(64 * 5, ), dtype=numba.float32)
     dev_box_idx = threadsPerBlock * col_start + tx
     if (tx < col_size):
@@ -420,8 +433,8 @@ def rotate_nms_kernel(n_boxes, nms_overlap_thresh, dev_boxes, dev_mask):
     row_start = cuda.blockIdx.y
     col_start = cuda.blockIdx.x
     tx = cuda.threadIdx.x
-    row_size = min(n_boxes - row_start * threadsPerBlock, threadsPerBlock)
-    col_size = min(n_boxes - col_start * threadsPerBlock, threadsPerBlock)
+    row_size = _min2(n_boxes - row_start * threadsPerBlock, threadsPerBlock)
+    col_size = _min2(n_boxes - col_start * threadsPerBlock, threadsPerBlock)
     block_boxes = cuda.shared.array(shape=(64 * 6, ), dtype=numba.float32)
     dev_box_idx = threadsPerBlock * col_start + tx
     if (tx < col_size):
@@ -494,8 +507,8 @@ def rotate_iou_kernel(N, K, dev_boxes, dev_query_boxes, dev_iou):
     row_start = cuda.blockIdx.x
     col_start = cuda.blockIdx.y
     tx = cuda.threadIdx.x
-    row_size = min(N - row_start * threadsPerBlock, threadsPerBlock)
-    col_size = min(K - col_start * threadsPerBlock, threadsPerBlock)
+    row_size = _min2(N - row_start * threadsPerBlock, threadsPerBlock)
+    col_size = _min2(K - col_start * threadsPerBlock, threadsPerBlock)
     block_boxes = cuda.shared.array(shape=(64 * 5, ), dtype=numba.float32)
     block_qboxes = cuda.shared.array(shape=(64 * 5, ), dtype=numba.float32)
 
@@ -587,8 +600,8 @@ def rotate_iou_kernel_eval(N,
     row_start = cuda.blockIdx.x
     col_start = cuda.blockIdx.y
     tx = cuda.threadIdx.x
-    row_size = min(N - row_start * threadsPerBlock, threadsPerBlock)
-    col_size = min(K - col_start * threadsPerBlock, threadsPerBlock)
+    row_size = _min2(N - row_start * threadsPerBlock, threadsPerBlock)
+    col_size = _min2(K - col_start * threadsPerBlock, threadsPerBlock)
     block_boxes = cuda.shared.array(shape=(64 * 5, ), dtype=numba.float32)
     block_qboxes = cuda.shared.array(shape=(64 * 5, ), dtype=numba.float32)
 

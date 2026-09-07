@@ -15,21 +15,36 @@
 """VoxelNet builder.
 """
 
+import numpy as np
+
+from second.core import view_transform
 from second.protos import second_pb2
 from second.pytorch.builder import losses_builder
 from second.pytorch.models.voxelnet import LossNormType, VoxelNet
 
 
 def build(model_cfg: second_pb2.VoxelNet, voxel_generator,
-          target_assigner) -> VoxelNet:
+          target_assigner, view='xy') -> VoxelNet:
     """build second pytorch instance.
+
+    `view` selects which plane pillars are formed on for the axis-collapse
+    ablation ('xy' = baseline PointPillars, 'xz', 'yz'); see
+    second/core/view_transform.py. It never changes `voxel_generator`
+    itself (that stays the canonical XY grid anchors/matching/NMS use).
     """
     if not isinstance(model_cfg, second_pb2.VoxelNet):
         raise ValueError('model_cfg not of type ' 'second_pb2.VoxelNet.')
     vfe_num_filters = list(model_cfg.voxel_feature_extractor.num_filters)
     vfe_with_distance = model_cfg.voxel_feature_extractor.with_distance
-    grid_size = voxel_generator.grid_size
-    dense_shape = [1] + grid_size[::-1].tolist() + [vfe_num_filters[-1]]
+    canonical_grid_size = voxel_generator.grid_size  # [nx, ny, nz], nz==1
+    canonical_hw = (int(canonical_grid_size[1]), int(canonical_grid_size[0]))
+
+    pillar_voxel_size, spatial_axes = view_transform.make_pillar_voxel_config(
+        voxel_generator.voxel_size, voxel_generator.point_cloud_range, view)
+    pc_range = voxel_generator.point_cloud_range
+    pillar_grid_size = np.round(
+        (pc_range[3:] - pc_range[:3]) / np.array(pillar_voxel_size)).astype(np.int64)
+    dense_shape = [1] + pillar_grid_size[::-1].tolist() + [vfe_num_filters[-1]]
     num_class = model_cfg.num_class
 
     num_input_features = model_cfg.num_point_features
@@ -90,7 +105,9 @@ def build(model_cfg: second_pb2.VoxelNet, voxel_generator,
         loc_loss_ftor=loc_loss_ftor,
         cls_loss_ftor=cls_loss_ftor,
         target_assigner=target_assigner,
-        voxel_size=voxel_generator.voxel_size,
-        pc_range=voxel_generator.point_cloud_range
+        voxel_size=pillar_voxel_size,
+        pc_range=pc_range,
+        pillar_spatial_axes=spatial_axes,
+        canonical_hw=canonical_hw
     )
     return net

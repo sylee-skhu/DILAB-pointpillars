@@ -22,6 +22,8 @@ Detection configuration framework, they should define their own builder function
 that wraps the build function.
 """
 
+from second.core import view_transform
+from second.core.voxel_generator import VoxelGenerator
 from second.protos import input_reader_pb2
 from second.data.dataset import KittiDataset
 from second.data.preprocess import prep_pointcloud
@@ -34,7 +36,8 @@ def build(input_reader_config,
           model_config,
           training,
           voxel_generator,
-          target_assigner=None):
+          target_assigner=None,
+          view='xy'):
     """Builds a tensor dictionary based on the InputReader config.
 
     Args:
@@ -69,11 +72,29 @@ def build(input_reader_config,
     feature_map_size = grid_size[:2] // out_size_factor
     feature_map_size = [*feature_map_size, 1][::-1]
 
+    pillar_voxel_generator = voxel_generator
+    anchor_area_threshold = cfg.anchor_area_threshold
+    if view != 'xy':
+        # Pillars are formed on a non-XY plane; anchors/matching/NMS still use
+        # the canonical XY `voxel_generator` untouched (see
+        # second/core/view_transform.py). anchors_mask (an occupancy-pruning
+        # optimization) is XY-grid-specific, so it's disabled for these views
+        # rather than made view-aware.
+        pillar_voxel_size, _ = view_transform.make_pillar_voxel_config(
+            voxel_generator.voxel_size, voxel_generator.point_cloud_range, view)
+        pillar_voxel_generator = VoxelGenerator(
+            voxel_size=pillar_voxel_size,
+            point_cloud_range=voxel_generator.point_cloud_range,
+            max_num_points=voxel_generator.max_num_points_per_voxel,
+            max_voxels=20000)
+        anchor_area_threshold = -1
+
     prep_func = partial(
         prep_pointcloud,
         root_path=cfg.kitti_root_path,
         class_names=list(cfg.class_names),
         voxel_generator=voxel_generator,
+        pillar_voxel_generator=pillar_voxel_generator,
         target_assigner=target_assigner,
         training=training,
         max_voxels=cfg.max_number_of_voxels,
@@ -93,7 +114,7 @@ def build(input_reader_config,
         generate_bev=generate_bev,
         without_reflectivity=without_reflectivity,
         num_point_features=num_point_features,
-        anchor_area_threshold=cfg.anchor_area_threshold,
+        anchor_area_threshold=anchor_area_threshold,
         gt_points_drop=cfg.groundtruth_points_drop_percentage,
         gt_drop_max_keep=cfg.groundtruth_drop_max_keep_points,
         remove_points_after_sample=cfg.remove_points_after_sample,

@@ -3,7 +3,12 @@ from enum import Enum
 from functools import reduce
 
 import numpy as np
-import sparseconvnet as scn
+try:
+    import sparseconvnet as scn
+except ImportError:
+    # Only needed by the sparse-conv ("SECOND") middle extractor; PointPillars
+    # uses PointPillarsScatter instead and never touches this module.
+    scn = None
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -530,6 +535,8 @@ class VoxelNet(nn.Module):
                  cls_loss_ftor=None,
                  voxel_size=(0.2, 0.2, 4),
                  pc_range=(0, -40, -3, 70.4, 40, 1),
+                 pillar_spatial_axes=(0, 1),
+                 canonical_hw=None,
                  name='voxelnet'):
         super().__init__()
         self.name = name
@@ -563,6 +570,11 @@ class VoxelNet(nn.Module):
         self._direction_loss_weight = direction_loss_weight
         self._cls_loss_weight = cls_loss_weight
         self._loc_loss_weight = loc_loss_weight
+        self._pillar_spatial_axes = tuple(pillar_spatial_axes)
+        # (H, W) the RPN/anchors expect; when the pillar grid was formed on a
+        # non-XY plane (see second/core/view_transform.py) its native size
+        # differs and gets resized to this before entering the RPN.
+        self._canonical_hw = tuple(canonical_hw) if canonical_hw is not None else None
 
         vfe_class_dict = {
             "VoxelFeatureExtractor": VoxelFeatureExtractor,
@@ -577,7 +589,8 @@ class VoxelNet(nn.Module):
                 num_filters=vfe_num_filters,
                 with_distance=with_distance,
                 voxel_size=voxel_size,
-                pc_range=pc_range
+                pc_range=pc_range,
+                spatial_axes=self._pillar_spatial_axes
             )
         else:
             self.voxel_feature_extractor = vfe_class(
@@ -589,7 +602,8 @@ class VoxelNet(nn.Module):
         print("middle_class_name", middle_class_name)
         if middle_class_name == "PointPillarsScatter":
             self.middle_feature_extractor = PointPillarsScatter(output_shape=output_shape,
-                                                                num_input_features=vfe_num_filters[-1])
+                                                                num_input_features=vfe_num_filters[-1],
+                                                                spatial_axes=self._pillar_spatial_axes)
             num_rpn_input_filters = self.middle_feature_extractor.nchannels
         else:
             mid_class_dict = {
@@ -671,6 +685,18 @@ class VoxelNet(nn.Module):
         else:
             spatial_features = self.middle_feature_extractor(
                 voxel_features, coors, batch_size_dev)
+            if (self._canonical_hw is not None
+                    and tuple(spatial_features.shape[-2:]) != self._canonical_hw):
+                # Pillars were formed on a non-XY plane (see
+                # second/core/view_transform.py): its native pseudo-image
+                # resolution doesn't match the canonical XY grid the
+                # RPN/anchors expect, so resample it to that size. This is a
+                # known, deliberately simple approximation -- it does not
+                # attempt to reproject XZ/YZ features into true XY spatial
+                # positions.
+                spatial_features = F.interpolate(
+                    spatial_features, size=self._canonical_hw,
+                    mode='bilinear', align_corners=False)
             if self._use_bev:
                 preds_dict = self.rpn(spatial_features, example["bev_map"])
             else:
