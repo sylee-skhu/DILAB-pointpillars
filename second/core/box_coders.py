@@ -72,4 +72,31 @@ class BevBoxCoder(BoxCoder):
         return np.concatenate([ret[..., :2], z_fixed, ret[..., 2:4], h_fixed, ret[..., 4:]], axis=-1)
 
 
+class XZBoxCoder(BoxCoder):
+    """Box coder for a pillar-axis-ablation branch that keeps pillars on the
+    XZ plane (Y collapsed) instead of resizing them back into the XY
+    anchor grid (see second/core/view_transform.py). Boxes/anchors here are
+    natively 4-dim -- (x, z, projected_width, h) -- with no rotation: yaw
+    doesn't rotate a box's XZ cross-section, it only changes the
+    axis-aligned width the box projects to (see
+    `box_np_ops.project_box3d_to_xz`). This coder only round-trips within
+    that 4-dim plane representation; it does not reconstruct a full 3D
+    (x,y,z,w,l,h,r) box -- that requires y/w/rotation from elsewhere (e.g.
+    an XY branch), which is out of scope for this XZ-only experiment.
+    """
+    def __init__(self, smooth_dim=False):
+        super().__init__()
+        self.smooth_dim = smooth_dim
+
+    @property
+    def code_size(self):
+        return 4
+
+    def _encode(self, boxes, anchors):
+        return box_np_ops.plane_box_encode(boxes, anchors, self.smooth_dim)
+
+    def _decode(self, encodings, anchors):
+        return box_np_ops.plane_box_decode(encodings, anchors, self.smooth_dim)
+
+
 

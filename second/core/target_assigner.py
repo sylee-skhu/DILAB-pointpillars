@@ -9,12 +9,27 @@ class TargetAssigner:
                  anchor_generators,
                  region_similarity_calculator=None,
                  positive_fraction=None,
-                 sample_size=512):
+                 sample_size=512,
+                 similarity_columns=None,
+                 box_ndim=None):
+        """
+        `similarity_columns`/`box_ndim` exist for branches whose anchors
+        aren't the usual 7-dim (x,y,z,w,l,h,r) -- e.g. the XZ/YZ
+        pillar-axis-ablation branch, whose anchors are 4-dim (u,v,proj_w,h)
+        with no rotation (see second/core/anchor_generator.py's
+        `AnchorGeneratorPlaneRange`). Left at their defaults, behavior is
+        unchanged from before these params existed: similarity comparison
+        uses columns [0,1,3,4,6] (x,y,w,l,r) and anchors are reshaped to
+        width 7.
+        """
         self._region_similarity_calculator = region_similarity_calculator
         self._box_coder = box_coder
         self._anchor_generators = anchor_generators
         self._positive_fraction = positive_fraction
         self._sample_size = sample_size
+        self._similarity_columns = (
+            similarity_columns if similarity_columns is not None else [0, 1, 3, 4, 6])
+        self._box_ndim = box_ndim if box_ndim is not None else 7
 
     @property
     def box_coder(self):
@@ -33,8 +48,8 @@ class TargetAssigner:
             prune_anchor_fn = None
 
         def similarity_fn(anchors, gt_boxes):
-            anchors_rbv = anchors[:, [0, 1, 3, 4, 6]]
-            gt_boxes_rbv = gt_boxes[:, [0, 1, 3, 4, 6]]
+            anchors_rbv = anchors[:, self._similarity_columns]
+            gt_boxes_rbv = gt_boxes[:, self._similarity_columns]
             return self._region_similarity_calculator.compare(
                 anchors_rbv, gt_boxes_rbv)
 
@@ -68,7 +83,7 @@ class TargetAssigner:
                 self._anchor_generators, matched_thresholds,
                 unmatched_thresholds):
             anchors = anchor_generator.generate(feature_map_size)
-            anchors = anchors.reshape([*anchors.shape[:3], -1, 7])
+            anchors = anchors.reshape([*anchors.shape[:3], -1, self._box_ndim])
             anchors_list.append(anchors)
             num_anchors = np.prod(anchors.shape[:-1])
             match_list.append(

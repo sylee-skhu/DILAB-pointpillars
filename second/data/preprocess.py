@@ -20,15 +20,19 @@ def merge_second_batch(batch_list, _unused=False):
             example_merged[k].append(v)
     ret = {}
     example_merged.pop("num_voxels")
+    # Multi-view fusion (MultiViewVoxelNet) adds 'voxels_xz'/'num_points_xz'/
+    # 'coordinates_xz' (and _yz) alongside the usual xy keys -- batch them
+    # the same way as their unsuffixed counterparts. No-op when those keys
+    # aren't present (single-branch xy-only path, unaffected).
+    concat_keys = ('voxels', 'num_points', 'num_gt', 'gt_boxes',
+                   'voxel_labels', 'match_indices')
     for key, elems in example_merged.items():
-        if key in [
-                'voxels', 'num_points', 'num_gt', 'gt_boxes', 'voxel_labels',
-                'match_indices'
-        ]:
+        if (key in concat_keys or key.startswith('voxels_')
+                or key.startswith('num_points_')):
             ret[key] = np.concatenate(elems, axis=0)
         elif key == 'match_indices_num':
             ret[key] = np.concatenate(elems, axis=0)
-        elif key == 'coordinates':
+        elif key == 'coordinates' or key.startswith('coordinates_'):
             coors = []
             for i, coor in enumerate(elems):
                 coor_pad = np.pad(
@@ -80,9 +84,23 @@ def prep_pointcloud(input_dict,
                     min_gt_point_dict=None,
                     bev_only=False,
                     use_group_id=False,
-                    out_dtype=np.float32):
-    """convert point cloud to voxels, create targets if ground truths 
+                    out_dtype=np.float32,
+                    anchor_feature_map_size=None,
+                    anchor_box_ndim=7,
+                    gt_box_projection_fn=None,
+                    aux_pillar_voxel_generators=None):
+    """convert point cloud to voxels, create targets if ground truths
     exists.
+
+    `anchor_feature_map_size`/`anchor_box_ndim`/`gt_box_projection_fn` exist
+    for branches whose anchors aren't the usual 7-dim (x,y,z,w,l,h,r) laid
+    out on the canonical XY grid -- e.g. the XZ/YZ pillar-axis-ablation
+    branch (native-resolution, 4-dim (u,v,proj_w,h) anchors -- see
+    second/core/anchor_generator.py's `AnchorGeneratorPlaneRange`). Left at
+    their defaults, behavior is unchanged: `anchor_feature_map_size` is
+    still derived from the canonical `voxel_generator.grid_size`, anchors
+    are still reshaped to width 7, and gt_boxes are used as-is (no
+    projection).
     """
     points = input_dict["points"]
     if training:
@@ -243,14 +261,27 @@ def prep_pointcloud(input_dict,
         'coordinates': coordinates,
         "num_voxels": np.array([voxels.shape[0]], dtype=np.int64)
     }
+    if aux_pillar_voxel_generators:
+        # Multi-view fusion (see MultiViewVoxelNet): voxelize the SAME
+        # points again per auxiliary view (xz/yz), under suffixed keys.
+        # Main 'voxels'/'coordinates'/'num_points' above stay the xy ones
+        # untouched, so single-branch callers are unaffected.
+        for view, gen in aux_pillar_voxel_generators.items():
+            aux_voxels, aux_coords, aux_num_points = gen.generate(points, max_voxels)
+            example[f'voxels_{view}'] = aux_voxels
+            example[f'num_points_{view}'] = aux_num_points
+            example[f'coordinates_{view}'] = aux_coords
     example.update({
         'rect': rect,
         'Trv2c': Trv2c,
         'P2': P2,
     })
     # if not lidar_input:
-    feature_map_size = grid_size[:2] // out_size_factor
-    feature_map_size = [*feature_map_size, 1][::-1]
+    if anchor_feature_map_size is not None:
+        feature_map_size = anchor_feature_map_size
+    else:
+        feature_map_size = grid_size[:2] // out_size_factor
+        feature_map_size = [*feature_map_size, 1][::-1]
     if anchor_cache is not None:
         anchors = anchor_cache["anchors"]
         anchors_bv = anchor_cache["anchors_bv"]
@@ -259,16 +290,24 @@ def prep_pointcloud(input_dict,
     else:
         ret = target_assigner.generate_anchors(feature_map_size)
         anchors = ret["anchors"]
-        anchors = anchors.reshape([-1, 7])
+        anchors = anchors.reshape([-1, anchor_box_ndim])
         matched_thresholds = ret["matched_thresholds"]
         unmatched_thresholds = ret["unmatched_thresholds"]
-        anchors_bv = box_np_ops.rbbox2d_to_near_bbox(
-            anchors[:, [0, 1, 3, 4, 6]])
+        if anchor_box_ndim == 7:
+            anchors_bv = box_np_ops.rbbox2d_to_near_bbox(
+                anchors[:, [0, 1, 3, 4, 6]])
+        else:
+            # anchors_bv/anchors_mask below is a rotated-BEV-box occupancy
+            # optimization specific to the 7-dim (x,y,z,w,l,h,r) layout --
+            # not applicable to a native-resolution plane-only anchor set.
+            # Left disabled here, same as the existing XZ/YZ (canonical-hw)
+            # ablation path (see second/builder/dataset_builder.py).
+            anchors_bv = None
     example["anchors"] = anchors
     # print("debug", anchors.shape, matched_thresholds.shape)
     # anchors_bv = anchors_bv.reshape([-1, 4])
     anchors_mask = None
-    if anchor_area_threshold >= 0:
+    if anchor_area_threshold >= 0 and anchors_bv is not None:
         coors = coordinates
         dense_voxel_map = box_np_ops.sparse_sum_for_anchors_mask(
             coors, tuple(grid_size[::-1][1:]))
@@ -289,9 +328,12 @@ def prep_pointcloud(input_dict,
     if not training:
         return example
     if create_targets:
+        assign_gt_boxes = gt_boxes
+        if gt_box_projection_fn is not None:
+            assign_gt_boxes = gt_box_projection_fn(gt_boxes)
         targets_dict = target_assigner.assign(
             anchors,
-            gt_boxes,
+            assign_gt_boxes,
             anchors_mask,
             gt_classes=gt_classes,
             matched_thresholds=matched_thresholds,

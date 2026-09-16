@@ -28,7 +28,14 @@ class Dataset(object):
 
 class KittiDataset(Dataset):
     def __init__(self, info_path, root_path, num_point_features,
-                 target_assigner, feature_map_size, prep_func):
+                 target_assigner, feature_map_size, prep_func,
+                 anchor_box_ndim=7):
+        """`anchor_box_ndim` exists for branches whose anchors aren't the
+        usual 7-dim (x,y,z,w,l,h,r) -- e.g. the XZ/YZ pillar-axis-ablation
+        branch's native 4-dim (u,v,proj_w,h) anchors (see
+        second/core/anchor_generator.py's `AnchorGeneratorPlaneRange`). At
+        its default (7), behavior is unchanged.
+        """
         with open(info_path, 'rb') as f:
             infos = pickle.load(f)
         #self._kitti_infos = kitti.filter_infos_by_used_classes(infos, class_names)
@@ -40,11 +47,17 @@ class KittiDataset(Dataset):
         # [352, 400]
         ret = target_assigner.generate_anchors(feature_map_size)
         anchors = ret["anchors"]
-        anchors = anchors.reshape([-1, 7])
+        anchors = anchors.reshape([-1, anchor_box_ndim])
         matched_thresholds = ret["matched_thresholds"]
         unmatched_thresholds = ret["unmatched_thresholds"]
-        anchors_bv = box_np_ops.rbbox2d_to_near_bbox(
-            anchors[:, [0, 1, 3, 4, 6]])
+        if anchor_box_ndim == 7:
+            anchors_bv = box_np_ops.rbbox2d_to_near_bbox(
+                anchors[:, [0, 1, 3, 4, 6]])
+        else:
+            # See the matching note in second/data/preprocess.py -- this
+            # rotated-BEV-box occupancy optimization doesn't apply to a
+            # native-resolution plane-only anchor set.
+            anchors_bv = None
         anchor_cache = {
             "anchors": anchors,
             "anchors_bv": anchors_bv,

@@ -160,6 +160,43 @@ def bev_box_decode(box_encodings, anchors, encode_angle_to_vector=False, smooth_
     return torch.cat([xg, yg, wg, lg, rg], dim=-1)
 
 
+def plane_box_encode(boxes, anchors, smooth_dim=False):
+    """Torch mirror of `box_np_ops.plane_box_encode` (single-plane, no rotation).
+
+    Args:
+        boxes ([N, 4] Tensor): u, v, proj_w, h.
+        anchors ([N, 4] Tensor): anchors in the same 4-column layout.
+    """
+    ua, va, wa, ha = torch.split(anchors, 1, dim=-1)
+    ug, vg, wg, hg = torch.split(boxes, 1, dim=-1)
+    diagonal = torch.sqrt(wa**2 + ha**2)
+    ut = (ug - ua) / diagonal
+    vt = (vg - va) / diagonal
+    if smooth_dim:
+        wt = wg / wa - 1
+        ht = hg / ha - 1
+    else:
+        wt = torch.log(wg / wa)
+        ht = torch.log(hg / ha)
+    return torch.cat([ut, vt, wt, ht], dim=-1)
+
+
+def plane_box_decode(box_encodings, anchors, smooth_dim=False):
+    """Inverse of `plane_box_encode`."""
+    ua, va, wa, ha = torch.split(anchors, 1, dim=-1)
+    ut, vt, wt, ht = torch.split(box_encodings, 1, dim=-1)
+    diagonal = torch.sqrt(wa**2 + ha**2)
+    ug = ut * diagonal + ua
+    vg = vt * diagonal + va
+    if smooth_dim:
+        wg = (wt + 1) * wa
+        hg = (ht + 1) * ha
+    else:
+        wg = torch.exp(wt) * wa
+        hg = torch.exp(ht) * ha
+    return torch.cat([ug, vg, wg, hg], dim=-1)
+
+
 def corners_nd(dims, origin=0.5):
     """generate relative box corners based on length per dim and
     origin point. 

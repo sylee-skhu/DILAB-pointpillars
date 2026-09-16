@@ -70,9 +70,10 @@ def example_convert_to_torch(example, dtype=torch.float32,
     ]
 
     for k, v in example.items():
-        if k in float_names:
+        if k in float_names or k.startswith("voxels_"):
             example_torch[k] = torch.as_tensor(v, dtype=dtype, device=device)
-        elif k in ["coordinates", "labels", "num_points"]:
+        elif (k in ["coordinates", "labels", "num_points"]
+              or k.startswith("coordinates_") or k.startswith("num_points_")):
             example_torch[k] = torch.as_tensor(
                 v, dtype=torch.int32, device=device)
         elif k in ["anchors_mask"]:

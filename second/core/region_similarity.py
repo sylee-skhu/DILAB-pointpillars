@@ -21,6 +21,8 @@ between the boxes in two BoxLists.
 from abc import ABCMeta
 from abc import abstractmethod
 
+import numpy as np
+
 from second.core import box_np_ops
 
 class RegionSimilarityCalculator(object):
@@ -91,6 +93,34 @@ class NearestIouSimilarity(RegionSimilarityCalculator):
     boxes2_bv = box_np_ops.rbbox2d_to_near_bbox(boxes2)
     ret = box_np_ops.iou_jit(boxes1_bv, boxes2_bv, eps=0.0)
     return ret
+
+
+class PlaneIouSimilarity(RegionSimilarityCalculator):
+  """Axis-aligned IOU similarity for a single-plane (no-rotation) box
+  representation, e.g. the XZ/YZ pillar-axis-ablation branch. There's no
+  rotation to snap to a nearest axis (unlike `NearestIouSimilarity`) -- a
+  box projected onto XZ/YZ is already axis-aligned by construction (see
+  `box_np_ops.project_box3d_to_xz`), so this converts (u, v, proj_w, h)
+  straight to a min/max box and calls the same axis-aligned `iou_jit` used
+  elsewhere.
+  """
+
+  def _compare(self, boxes1, boxes2):
+    """Args:
+      boxes1, boxes2: [N, 4] / [M, 4] (u, v, proj_w, h) tensors.
+
+    Returns:
+      A tensor with shape [N, M] representing pairwise iou scores.
+    """
+    boxes1_minmax = _plane_box_to_minmax(boxes1)
+    boxes2_minmax = _plane_box_to_minmax(boxes2)
+    return box_np_ops.iou_jit(boxes1_minmax, boxes2_minmax, eps=0.0)
+
+
+def _plane_box_to_minmax(boxes):
+  u, v, w, h = boxes[..., 0], boxes[..., 1], boxes[..., 2], boxes[..., 3]
+  return np.stack(
+      [u - w / 2, v - h / 2, u + w / 2, v + h / 2], axis=-1)
 
 
 class DistanceSimilarity(RegionSimilarityCalculator):

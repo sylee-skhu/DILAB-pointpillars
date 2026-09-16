@@ -1,7 +1,7 @@
 from abc import ABCMeta
 from abc import abstractmethod
 from abc import abstractproperty
-from second.core.box_coders import GroundBox3dCoder, BevBoxCoder
+from second.core.box_coders import GroundBox3dCoder, BevBoxCoder, XZBoxCoder
 from second.pytorch.core import box_torch_ops
 import torch
 
@@ -26,5 +26,13 @@ class BevBoxCoderTorch(BevBoxCoder):
         z_fixed = torch.full([*ret.shape[:-1], 1], self.z_fixed, dtype=ret.dtype, device=ret.device)
         h_fixed = torch.full([*ret.shape[:-1], 1], self.h_fixed, dtype=ret.dtype, device=ret.device)
         return torch.cat([ret[..., :2], z_fixed, ret[..., 2:4], h_fixed, ret[..., 4:]], dim=-1)
+
+
+class XZBoxCoderTorch(XZBoxCoder):
+    def encode_torch(self, boxes, anchors):
+        return box_torch_ops.plane_box_encode(boxes, anchors, self.smooth_dim)
+
+    def decode_torch(self, encodings, anchors):
+        return box_torch_ops.plane_box_decode(encodings, anchors, self.smooth_dim)
 
 

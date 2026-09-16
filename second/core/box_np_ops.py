@@ -167,6 +167,114 @@ def bev_box_decode(box_encodings, anchors, encode_angle_to_vector=False, smooth_
         rg = rt + ra
     return np.concatenate([xg, yg, wg, lg, rg], axis=-1)
 
+
+def project_box3d_to_xz(boxes):
+    """Project full 3D lidar-frame boxes onto the XZ plane (Y collapsed).
+
+    Rotation (yaw, about the lidar Z axis) does not rotate a box's XZ
+    cross-section -- it only changes how wide the box's footprint looks
+    along X (a box longer along its heading direction looks narrower along
+    X the more it's turned away from heading-along-X). That axis-aligned
+    projected width is `|l*cos(r)| + |w*sin(r)|` (standard rotated-rect ->
+    axis-aligned-bbox formula). Height is unaffected by yaw.
+
+    Args:
+        boxes ([N, 7]): lidar-frame boxes, x, y, z, w, l, h, r.
+
+    Returns:
+        [N, 4]: x, z, projected_width, h.
+    """
+    x, y, z, w, l, h, r = np.split(boxes, 7, axis=-1)
+    proj_w = np.abs(l * np.cos(r)) + np.abs(w * np.sin(r))
+    return np.concatenate([x, z, proj_w, h], axis=-1)
+
+
+def project_box3d_to_yz(boxes):
+    """Project full 3D lidar-frame boxes onto the YZ plane (X collapsed).
+
+    See `project_box3d_to_xz` -- same idea, projected onto Y instead of X:
+    `|l*sin(r)| + |w*cos(r)|`.
+
+    Args:
+        boxes ([N, 7]): lidar-frame boxes, x, y, z, w, l, h, r.
+
+    Returns:
+        [N, 4]: y, z, projected_width, h.
+    """
+    x, y, z, w, l, h, r = np.split(boxes, 7, axis=-1)
+    proj_w = np.abs(l * np.sin(r)) + np.abs(w * np.cos(r))
+    return np.concatenate([y, z, proj_w, h], axis=-1)
+
+
+def plane_box_encode(boxes, anchors, smooth_dim=False):
+    """Box encode for a single-plane (no-rotation) box coder, e.g. XZ/YZ.
+
+    Args:
+        boxes ([N, 4]): u, v, proj_w, h (see `project_box3d_to_xz`).
+        anchors ([N, 4]): anchors in the same 4-column layout.
+    """
+    ua, va, wa, ha = np.split(anchors, 4, axis=-1)
+    ug, vg, wg, hg = np.split(boxes, 4, axis=-1)
+    diagonal = np.sqrt(wa**2 + ha**2)
+    ut = (ug - ua) / diagonal
+    vt = (vg - va) / diagonal
+    if smooth_dim:
+        wt = wg / wa - 1
+        ht = hg / ha - 1
+    else:
+        wt = np.log(wg / wa)
+        ht = np.log(hg / ha)
+    return np.concatenate([ut, vt, wt, ht], axis=-1)
+
+
+def plane_box_decode(box_encodings, anchors, smooth_dim=False):
+    """Inverse of `plane_box_encode`."""
+    ua, va, wa, ha = np.split(anchors, 4, axis=-1)
+    ut, vt, wt, ht = np.split(box_encodings, 4, axis=-1)
+    diagonal = np.sqrt(wa**2 + ha**2)
+    ug = ut * diagonal + ua
+    vg = vt * diagonal + va
+    if smooth_dim:
+        wg = (wt + 1) * wa
+        hg = (ht + 1) * ha
+    else:
+        wg = np.exp(wt) * wa
+        hg = np.exp(ht) * ha
+    return np.concatenate([ug, vg, wg, hg], axis=-1)
+
+
+def create_plane_anchors(u_range, v_range, u_size, v_size, sizes, dtype=np.float32):
+    """Native-resolution anchors for a single (no-rotation) plane, e.g. XZ.
+
+    Unlike `create_anchors_3d_range` (which always emits 7-column xyz
+    anchors and assumes the two spatial axes are x,y), this emits 4-column
+    (u, v, proj_w, h) anchors directly on whichever two axes the caller
+    means by u/v -- no relabeling of x/y/z columns involved. Every anchor
+    here has an implicit rotation of 0: projecting a box onto XZ/YZ removes
+    in-plane rotation entirely (see `project_box3d_to_xz`), so there's
+    nothing for a second rotation anchor to disambiguate.
+
+    Args:
+        u_range: (u_min, u_max) -- e.g. the lidar X range.
+        v_range: (v_min, v_max) -- e.g. the lidar Z range.
+        u_size, v_size: number of grid cells along u, v.
+        sizes: [K, 2] or flat length-2K list of (proj_w, h) anchor sizes.
+
+    Returns:
+        [v_size, u_size, K, 4] anchors: u, v, proj_w, h.
+    """
+    sizes = np.reshape(np.array(sizes, dtype=dtype), [-1, 2])
+    u_centers = np.linspace(u_range[0], u_range[1], u_size, dtype=dtype)
+    v_centers = np.linspace(v_range[0], v_range[1], v_size, dtype=dtype)
+    uu, vv = np.meshgrid(u_centers, v_centers, indexing='xy')  # both [v_size, u_size]
+    num_size = sizes.shape[0]
+    uu = np.tile(uu[..., np.newaxis], [1, 1, num_size])
+    vv = np.tile(vv[..., np.newaxis], [1, 1, num_size])
+    ww = np.tile(sizes[np.newaxis, np.newaxis, :, 0], [v_size, u_size, 1])
+    hh = np.tile(sizes[np.newaxis, np.newaxis, :, 1], [v_size, u_size, 1])
+    return np.stack([uu, vv, ww, hh], axis=-1)
+
+
 def corners_nd(dims, origin=0.5):
     """generate relative box corners based on length per dim and
     origin point. 
